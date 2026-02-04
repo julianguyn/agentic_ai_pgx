@@ -7,6 +7,7 @@ output: pdf_document
 suppressPackageStartupMessages({
   library(PharmacoGx)
   library(tidyverse)
+  library(ggpubr)
   library(genefu)
   library(here)
 })
@@ -140,7 +141,7 @@ gcsi_sen <- summarizeSensitivityProfiles(
 *Task: Find samples with lapatinib*
 
 ```{r}
-egfr_tki <- c("Gefitinib", "Erlotinib", "Lapatinib")
+egfr_tki <- c("Erlotinib", "Lapatinib")
 genes <- c("EGFR", "BRCA1", "BRCA2")
 
 # subset drug sensitivity
@@ -171,8 +172,7 @@ toPlot <- data.frame(
   sample = common,
   EGFR = rna[["EGFR"]],
   Lapatinib = sen[["Lapatinib"]],
-  Erlotinib = sen[["Erlotinib"]],
-  Gefitinib = sen[["Gefitinib"]]
+  Erlotinib = sen[["Erlotinib"]]
 )
 
 # plot associations between genes of interest and TKi
@@ -187,9 +187,8 @@ plot_egfr <- function(drug) {
 
 p1 <- plot_egfr("Lapatinib")
 p2 <- plot_egfr("Erlotinib")
-p3 <- plot_egfr("Gefitinib")
 
-ggarrange(p1, p2, p3, ncol = 3)
+ggarrange(p1, p2)
 ```
 
 *Task: does BRCA mutation status influence the strength of association*
@@ -212,7 +211,5 @@ plot_egfr <- function(drug) {
 
 p1 <- plot_egfr("Lapatinib")
 p2 <- plot_egfr("Erlotinib")
-p3 <- plot_egfr("Gefitinib")
-
-ggarrange(p1, p2, p3, ncol = 3)
+ggarrange(p1, p2)
 ```
