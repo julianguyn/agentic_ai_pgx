@@ -13,8 +13,16 @@ suppressPackageStartupMessages({
 })
 ```
 
+Immunotherapy and immuno-oncology (IO) datasets provide rich molecular and clinical information across many cohorts treated with immune checkpoint blockade, including transcriptomes, genomic alterations, response labels, and survival outcomes. These data are ideal for benchmarking and preliminary discovery of IO biomarkers such as checkpoint genes and immune signatures, but heterogeneity in endpoints, metadata, and data structures makes analyses difficult to scale and reproduce. An agentic framework equipped with standardized tools for cohort selection, endpoint harmonization, signature scoring, survival evaluation, and reporting can accelerate ICB biomarker analyses while producing auditable, reproducible execution traces.
 
-*Step 1: Load ICB data (CSV)*
+### Prompt to Agent:
+**Hypothesis:** In ICB-treated cohorts, established IO markers and immune activity programs will show measurable concordance with IO outcomes (e.g., overall survival).
+
+**Goal:** Quantify how well individual immune checkpoint genes or immune signatures rank IO outcomes (e.g., overall survival) in an ICB-treated cohort, using the concordance index (C-index) computed from continuous expression and a median high/low split. 
+
+### Example Agent Output:
+
+*Step 1: Load ICB data*
 
 ```{r}
 # load in csv file
@@ -22,10 +30,10 @@ filepath <- list.files(here("./data/rawdata"), pattern = "\\.csv$", full.names =
 dat_icb <- read.csv(filepath, check.names = FALSE)
 
 # define which columns are expression features clinical/metadata
-# first 10 columns are clinical/metadata
+# identified the first 10 columns as clinical/metadata
 genes <- colnames(dat_icb)[-c(1:10)]
 
-# perform basic checks
+# perform basic checks on dataset
 stopifnot(all(c("survival_time_os", "event_occurred_os") %in% colnames(dat_icb)))
 stopifnot(is.numeric(dat_icb$survival_time_os))
 stopifnot(all(dat_icb$event_occurred_os %in% c(0, 1, NA)))
@@ -64,8 +72,7 @@ write.csv(ci_cont, file = here("./data/results/ci_cont.csv"))
 
 *Step 3: Compute C-index using binary markers (High vs Low, median split)*
 
-This is mainly useful for demonstration/visualization (KM curves),
-but it discards information compared with continuous markers.
+This is mainly useful for demonstration/visualization (KM curves), but it discards information compared with continuous markers.
 
 ```{r}
 ci_bin <- lapply(1:length(genes), function(k){
@@ -95,20 +102,33 @@ head(ci_bin)
 write.csv(ci_bin, file = here("./data/results/ci_bin.csv"))
 ```
 
-
 *Notes / next steps*
 
-- Known ICB-related markers often discussed include: LAG3, TIGIT, CD274 (PD-L1).
+- Known ICB-related markers often discussed include: LAG3, TIGIT, CD274.
 - If you want a simple KM plot for one marker:
 
 ```{r}
+# fit survival model
 cut <- median(dat_icb$LAG3, na.rm=TRUE)
 dat_icb$LAG3_group <- ifelse(dat_icb$LAG3 >= cut, "High", "Low")
 fit <- survfit(Surv(survival_time_os, event_occurred_os) ~ LAG3_group, data=dat_icb)
-plot(fit)
+
+# calculate p-value with log-rank test
+survdiff_result <- survdiff(Surv(survival_time_os, event_occurred_os) ~ LAG3_group, 
+                            data=dat_icb)
+pval <- pchisq(survdiff_result$chisq, df=1, lower.tail=FALSE)
+
+# plot kaplan-meier curves
+plot(fit, col=c("red", "blue"), lwd=2,
+     xlab="Time", ylab="Survival Probability",
+     main="Survival by LAG3 Expression")
+legend("topright", legend=c("High", "Low"), col=c("red", "blue"), lwd=2)
+text(x=max(dat_icb$survival_time_os, na.rm=TRUE)*0.7, 
+     y=0.75, 
+     labels=paste("p-value =", round(pval, 4)))
 ```
 
-- If you want to use an ORCESTRA-derived MultiAssayExperiment (MAE) instead of CSV: you can load the MAE, extract a SummarizedExperiment, then build a clean data.frame with survival + markers for the same workflow above.
+- If you want to use an ORCESTRA-derived MultiAssayExperiment (MAE) instead of CSV: you can load the MAE, extract a `SummarizedExperiment`, then build a clean data.frame with survival + markers for the same workflow above.
 
 ```{r, eval = FALSE}
 library(PredictioR)
