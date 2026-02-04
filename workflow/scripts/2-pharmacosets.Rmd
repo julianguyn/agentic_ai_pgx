@@ -106,7 +106,7 @@ contains 788 samples 675 cell lines with mutation and transcriptomic profiles, a
 with 16,688 drug response experiments.
 
 ```{r}
-gcsi <- downloadPSet("gCSI_2019")
+gcsi <- readRDS(here("./data/rawdata/gCSI.rds")) |> updateObject()
 gcsi
 ```
 . . .
@@ -175,15 +175,7 @@ toPlot <- data.frame(
   Gefitinib = sen[["Gefitinib"]]
 )
 
-res <- cor.test(toPlot$gene, toPlot$drug)
-print(paste0(
-  "EGFR expression and Lapatinib response have a Pearson's correlation of ",
-  round(res$estimate, 3), 
-  " (p-value = ", res$p.value, 10, ")"
-))
-```
-
-```{r}
+# plot associations between genes of interest and TKi
 plot_egfr <- function(drug) {
   return(
     ggplot(toPlot, aes(x = EGFR, y = .data[[drug]])) +
