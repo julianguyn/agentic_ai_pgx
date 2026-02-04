@@ -1,0 +1,129 @@
+---
+title: "Agentic AI for Adaptive Pharmacogenomic Biomarker Discovery in Cancer"
+output: pdf_document
+---
+
+```{r load_packages, eval=TRUE, echo=FALSE, include=FALSE}
+suppressPackageStartupMessages({
+  library(MultiAssayExperiment)
+  library(survival)
+  library(survcomp)
+  library(GSVA)
+  library(here)
+})
+```
+
+
+*Step 1: Load ICB data (CSV)*
+
+```{r}
+# load in csv file
+filepath <- list.files(here("./data/rawdata"), pattern = "\\.csv$", full.names = TRUE)
+dat_icb <- read.csv(filepath, check.names = FALSE)
+
+# define which columns are expression features clinical/metadata
+# first 10 columns are clinical/metadata
+genes <- colnames(dat_icb)[-c(1:10)]
+
+# perform basic checks
+stopifnot(all(c("survival_time_os", "event_occurred_os") %in% colnames(dat_icb)))
+stopifnot(is.numeric(dat_icb$survival_time_os))
+stopifnot(all(dat_icb$event_occurred_os %in% c(0, 1, NA)))
+```
+
+*Step 2: Compute C-index using continuous markers (recommended)*
+
+C-index here assesses how well a marker ranks patients by risk.
+For expression, use the continuous values for best use of information.
+
+```{r}
+ci_cont <- lapply(1:length(genes), function(k){
+
+# concordance index 
+ci <- concordance.index(
+  x = dat_icb[, genes[k]],
+  surv.time = dat_icb$survival_time_os,
+  surv.event = dat_icb$event_occurred_os,
+  method = "noether"  
+)
+
+data.frame(
+  gene = genes[k],
+  c.idex = ci$c.index,
+  ci.lower = ci$lower,
+  ci.upper = ci$upper,
+  pval = ci$p.value,
+  cancer_type = unique(dat_icb$cancer_type),
+  treatment = unique(dat_icb$treatment))
+})
+
+ci_cont <- do.call(rbind, ci_cont)
+head(ci_cont)
+write.csv(ci_cont, file = here("./data/results/ci_cont.csv"))
+```
+
+*Step 3: Compute C-index using binary markers (High vs Low, median split)*
+
+This is mainly useful for demonstration/visualization (KM curves),
+but it discards information compared with continuous markers.
+
+```{r}
+ci_bin <- lapply(1:length(genes), function(k){
+
+cut <- median( dat_icb[, genes[k]], na.rm = TRUE)
+g <- as.integer( dat_icb[, genes[k]] >= cut)  # High=1, Low=0
+
+ci <- concordance.index(x = g, 
+                        surv.time = dat_icb$survival_time_os,
+                        surv.event = dat_icb$event_occurred_os,
+                        method="noether")
+
+
+data.frame(gene = genes[k],
+           c.idex = ci$c.index,
+           ci.lower = ci$lower,
+           ci.upper = ci$upper,
+           pval = ci$p.value,
+           cancer_type = unique(dat_icb$cancer_type),
+           treatment = unique(dat_icb$treatment))
+
+
+})
+
+ci_bin <- do.call(rbind, ci_bin)
+head(ci_bin)
+write.csv(ci_bin, file = here("./data/results/ci_bin.csv"))
+```
+
+
+*Notes / next steps*
+
+- Known ICB-related markers often discussed include: LAG3, TIGIT, CD274 (PD-L1).
+- If you want a simple KM plot for one marker:
+
+```{r}
+cut <- median(dat_icb$LAG3, na.rm=TRUE)
+dat_icb$LAG3_group <- ifelse(dat_icb$LAG3 >= cut, "High", "Low")
+fit <- survfit(Surv(survival_time_os, event_occurred_os) ~ LAG3_group, data=dat_icb)
+plot(fit)
+```
+
+- If you want to use an ORCESTRA-derived MultiAssayExperiment (MAE) instead of CSV: you can load the MAE, extract a SummarizedExperiment, then build a clean data.frame with survival + markers for the same workflow above.
+
+```{r, eval = FALSE}
+library(PredictioR)
+
+files <- list.files(file.path(dir_input, 'rds'))
+dat <- readRDS(file.path(dir_input, 'rds', files))
+dat_icb <- createSE(dat)
+expr <- assay(dat_icb)
+clin <- colData(expr)
+
+# From here, you’d create dat_icb-like object:
+dat_icb <- data.frame(
+  survival_time_os  = clin$survival_time_os,
+  event_occurred_os = clin$event_occurred_os,
+  t(expr[c("LAG3","CD274"), ]) |> t()  # or compute signature scores first
+)
+```
+
