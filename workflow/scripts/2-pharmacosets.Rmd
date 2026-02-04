@@ -1,641 +1,226 @@
 ---
 title: "Agentic AI for Adaptive Pharmacogenomic Biomarker Discovery in Cancer"
-output: 
-  BiocStyle::html_document:
-    self_contained: yes
-    toc: true
-    toc_float: false
-    toc_depth: 2
-    code_folding: show
+output: pdf_document
 ---
-
-```{r global_knitr_opts, echo=FALSE}
-knitr::opts_chunk$set(
-  echo = TRUE,
-  include = TRUE,
-  warning = FALSE,
-  message = TRUE
-)
-```
-
-```{r eval=TRUE, echo=FALSE}
-PGx <- BiocStyle::Biocpkg("PharmacoGx")
-CGx <- BiocStyle::Biocpkg("CoreGx")
-TGx <- BiocStyle::Biocpkg("ToxicoGx")
-RGx <- BiocStyle::Biocpkg("RadioGx")
-Xv <- BiocStyle::Biocpkg("Xeva")
-DT <- BiocStyle::CRANpkg("data.table")
-SE <- BiocStyle::Biocpkg("SummarizedExperiment")
-MAE <- BiocStyle::Biocpkg("MultiAssayExperiment")
-```
 
 ```{r load_packages, eval=TRUE, echo=FALSE, include=FALSE}
 suppressPackageStartupMessages({
   library(PharmacoGx)
-  library(data.table)
   library(tidyverse)
-  library(ggpubr)
-  library(sva)
+  library(genefu)
+  library(here)
 })
 ```
 
-# Preliminary Data / Results {-}
+## Applications in Preclinical Biomarker Discovery {-}
 
-## Analysis of Cell Line Data using PharmacoGx {-}
+Pharmacogenomic datasets provide a wealth of biological information across various
+experiments and sequencing technologies for a large collection of preclinical samples.
+While this makes for an ideal data source for preliminary biomarker discovery, 
+the data container structure can be difficult to navigate.
+An agentic framework, provided with tools from the PharmacoGx package, can 
+expedite bioinformatic analysis.
 
-*Downloading Data from [orcestra.ca](https://orcestra.ca)*
+### Case scenario 1: 
+Gene expression-based subtypes of breast cancer are widely studied to be associated
+with response to treatment. 
 
-```{r get_avail_psets}
-available <- PharmacoGx::availablePSets() |>
-  data.table::as.data.table()
+The following dataset was downloaded from [orcestra.ca](https://orcestra.ca). The
+dataset is stored as a `PharmacoSet` object from the PharmacoGx package. The dataset
+contains 74 breast cancer samples with 9756 drug response experiments.
 
-print(names(available))
-
-print(available[, c("Dataset Name", "PSet Name", "version")])
+```{r}
+gray <- readRDS(here("./data/rawdata/PSet_GRAY2017.rds")) |> updateObject()
+gray
 ```
-. . .
 
-The following function from `r PGx` can be used to download any of the available PSets from [orcestra.ca](https://orcestra.ca).
+*Task: compute pam50 subtypes*
 
-The command to do so is:
-``` {r download_pset_orcestra, eval=FALSE}
-PharmacoGx::downloadPSet(
-  name = "CCLE_2015",
-  saveDir = "../psets", # change this directory as you see fit
-  timeout = 3600,
-  verbose = TRUE
+```{r}
+# load in genefu PAM50 subtyping model
+data(pam50.robust)
+
+# get gene expression
+gray_rna <- summarizeMolecularProfiles(
+  gray, 
+  mDataType = "Kallisto_0.46.1.rnaseq"
+) |> suppressMessages()
+rna <- t(assay(gray_rna)) |> as.data.frame()
+
+# create metadata file
+meta <- gray_rna@elementMetadata[,c("gene_id", "gene_name")] |> as.data.frame()
+colnames(meta) <- c("Ensembl", "Gene.Symbol")
+colnames(rna) <- meta$Gene.Symbol[match(colnames(rna), meta$Ensembl)]
+
+# get subtype predictions for PAM50
+pam50 <- molecular.subtyping(
+  sbt.model = "pam50", 
+  data = rna,
+  annot = meta, 
+  do.mapping = FALSE
 )
-
-# Note: this may take a while to download as the files are stored in
-# Zenodo and are quite large
-```
-. . .
-
-For convenience and in the interest of time, we have created a `PharmacoSet` to be used 
-in this tutorial. We will be interacting with this dataset for the remainder of the tutorial.
-
-```{r load_pset}
-pset <- CBWWorkshop2024::dummy_pset
-pset
-```
-
-# Understanding the `PharmacoSet` Data Structure
-
-The `PharmacoSet` class is a container for pharmacogenomic data.
-
-This pharmacogenomic data is typically generated from high-throughput
-screening experiments where cell lines are treated with a panel of drugs at
-multiple doses and the response is measured using a molecular assay.
-
-Pharmacogenomic data is located in a `PharmacoSet` within its slots, which are
-accessed using the `@` operator.
-
-```{r show_pset_structure}
-slotNames(pset)
-```
-
-. . .
-
-```{r core_set_class, echo=FALSE, fig.wide=TRUE, fig.cap = "**PharmacoSet** class structure" }
-knitr::include_graphics("./CoreSet-class.png")
-```
-
-# Metadata 
-
-Metadata for cell-lines (`samples`) and drugs (`treatments`) are stored in 
-the `sample` and `treatment` slots, respectively.
-
-These are data frames with rows corresponding to samples or treatments and 
-columns corresponding to metadata fields. The metadata fields are typically a 
-combination of data from the original data source, and curated data from 
-external sources such as [Cellosaurus](https://web.expasy.org/cellosaurus/),
-[DrugBank](https://go.drugbank.com/), and [PubChem](https://pubchem.ncbi.nlm.nih.gov/).
-
-## View the `sample` slot
-
-We can access the `sampleNames` of the `PharmacoSet`:
-
-```{r show_sample_names}
-PharmacoGx::sampleNames(pset)
-```
-. . .
-
-To get all the metadata associated with the samples, we can access the `sample` slot:
-```{r show_samples}
-pset@sample |> str()
-```
-We can see from the `sample` slot that there are 50 samples in this `PharmacoSet`.
-
-## View the `treatment` slot
-
-Similar to the `sample`, we can access the `treatmentNames` of the `PharmacoSet`:
-
-```{r show_treatment_names}
-PharmacoGx::treatmentNames(pset) |> head()
-```
-. . .
-
-To get all the metadata associated with the treatments, we can access the `treatment` slot:
-
-```{r show_treatments}
-pset@treatment |> str()
-```
-There are also 22 treatments used.
-
-# Molecular Profiles
-
-In `r PGx`, molecular profiles refer to any data that is measured on the 
-samples in the `PharmacoSet`. This can include gene expression, 
-copy number, mutation, or any other type of data that can be measured on 
-a sample.
-
-Each Molecular Data Type (`mDataType`) is stored in a `SummarizedExperiment`.
-All the `SummarizedExperiment` objects are stored in a container called
-a `MultiAssayExperiment` which can be accessed through the 
-`molecularProfiles` slot.
-
-
-
-## `MultiAssayExperiment` and `SummarizedExperiment`
-
-
-```{r SummarizedExperiment_schema, echo=FALSE, fig.wide=TRUE, fig.cap = "**SummarizedExperiment** and **MultiAssayExperiment** classes."}
-knitr::include_graphics("./MultiAssayExperiment_SummarizedExperiment_schematics.png")
-```
-## View the `molecularProfiles` slot
-
-```{r show_molecular_profiles}
-pset@molecularProfiles
-```
-
-# Treatment Response
-
-The treatment response data was traditionally stored in a `list`. To accelerate
-analysis, we have developed a new class called the `TreatmentResponseExperiment`
-(TRE) which has been specifically designed to handle high dimensional biological
-stimulus-response data.
-
-## View the `treatmentResponse` slot
-
-```{r show_treatment_response}
-pset@treatmentResponse
-```
-
-. . .
-
-To view all the methods available for the `TreatmentResponseExperiment` class,
-we can use the `methods` function:
-
-```{r show_tre_methods}
-methods(class = "TreatmentResponseExperiment")
-```
-
-# Subsetting a `PharmacoSet`
-
-
-## Subset by `sampleNames` and/or `treatmentNames`
-
-When subsetting a `PharmacoSet` object by `sample` names, both the 
-`MultiAssayExperiment` and `TreatmentResponseExperiment` objects will be 
-subsetted so all their internal `Experiments` only contain data for the samples
-of interest.
-
-However, when subsetting by `treatment` names, only the `TRE` object will be 
-subsetted.
-
-. . .
-
-```{r subset_pset}
-PharmacoGx::subsetBySample(
-  pset,
-  sample = PharmacoGx::sampleNames(pset)[1:5]
+gray_pam50 <- cbind(
+  Subtype = as.character(pam50$subtype), 
+  as.data.frame(pam50$subtype.proba)
 )
-
-PharmacoGx::subsetByTreatment(
-  pset,
-  treatment = PharmacoGx::treatmentNames(pset)[1:5]
-)
+head(gray_pam50)
 ```
 
-## Subsetting using `sample` and `treatment` metadata
+*Task: assess if response to HER2-targeted therapies is more prevalent in HER2 subtypes*
 
-The utility of the `metadata` slots in the `PharmacoSet` class 
+```{r}
+# get drug sensitivity matrix
+gray_sen <- summarizeSensitivityProfiles(
+    gray,
+    sensitivity.measure = "aac_recomputed",
+    summary.stat = "median",
+    verbose = TRUE
+) |> t() |> as.data.frame()
 
-```{r subset_pset_metadata, warning=FALSE}
-unique(pset@sample$tissueid)
-
-tissues_of_interest <- c("Kidney")
-
-(samples_of_interest <- pset@sample[
-  pset@sample$tissueid %in% tissues_of_interest,
-  "sampleid"
-]
-)
-
-PharmacoGx::subsetBySample(
-  pset,
-  samples_of_interest
-)
-```
-
-A concise way to subset by `sample` in one step:
-
-```{r subset_pset_metadata2, warning=FALSE}
-PharmacoGx::subsetBySample(
-  pset,
-  sample = pset@sample[
-    pset@sample$tissueid == "Kidney",
-    "sampleid"
-  ]
-)
-```
-
-# Computing over a `TreatmentResponseExperiment`
-
-The `TreatmentResponseExperiment` class has been designed to facilitate
-more than just storing data efficiently. Once the data is curated and
-stored safely inside our object, we are ready to start answering questions.
-
-First, let's extract the `TRE` to work with:
-
-```{r extract_tre}
-tre <- pset@treatmentResponse
-show(tre)
-```
-
-## Aggregating over the `TreatmentResponseExperiment`
-
-The `aggregate` function is a powerful tool that allows us to summarize the
-data in a `TreatmentResponseExperiment` object.
-
-```{r tre_aggregate_example}
-tre |>
-  aggregate(
-    assay = "sensitivity",
-    N = .N,
-    by = c("treatmentid", "treatmentdose", "sampleid", "bio_rep")
+# add drugs of interest
+toPlot <- cbind(gray_pam50, gray_sen[,c("Trastuzumab", "Lapatinib")])
+her2_toPlot <- toPlot %>%
+  dplyr::select(Subtype, Trastuzumab, Lapatinib) %>%
+  pivot_longer(
+    cols = c(Trastuzumab, Lapatinib),
+    names_to = "Drug",
+    values_to = "AAC"
   )
-```
+her2_toPlot$label <- ifelse(her2_toPlot$Subtype == "Her2", "Her2", "Other")
 
-You can also use the `subset` function to subset the `TreatmentResponseExperiment` object
-before performing `aggregate`.
-
-Additionally, you can even `subset` over the result of an `aggregate` operation.
-
-```{r tre_aggregate_example2}
-tre |>
-  subset(treatmentid %in% c("Doxorubicin", "Ixabepilone")) |>
-  aggregate(
-    assay = "sensitivity",
-    N = .N,
-    by = c("treatmentid", "treatmentdose", "sampleid", "bio_rep")
-  ) |>
-  subset(N > 1 & sampleid == "A-498")
+ggplot(her2_toPlot, aes(x = Subtype, y = AAC, fill = label)) +
+  geom_boxplot() + facet_wrap(~Drug) +
+  theme_minimal() + theme(panel.border = element_rect()) +
+  scale_fill_manual("Subtype", values = c("#5E4B56", "#A690A4"))
 ```
 
 
-### Plotting the number of replicates
+### Case scenario 2:
+High tumour cellularity can be associated with more aggressive cancers. 
+Gene signatures that are surrogate markers of tumour cellularity may be predictive 
+of response to immunotherapies.
 
-The last two examples have shown that there are technical replicates in the data.
-We can visualize the number of replicates using a histogram.
+The code retrieves a dataset from [orcestra.ca](https://orcestra.ca). The
+dataset is stored as a `PharmacoSet` object from the PharmacoGx package. The dataset
+contains 788 samples 675 cell lines with mutation and transcriptomic profiles, along 
+with 16,688 drug response experiments.
 
-```{r tre_aggregate}
-tre |>
-  aggregate(
-    assay = "sensitivity",
-    N = .N,
-    by = c("treatmentid", "treatmentdose", "sampleid", "bio_rep")
-  ) |>
-  with(
-    expr = hist(
-      N,
-      main = "Histogram of Number of Replicates",
-      xlab = "Number of Replicates"
-    )
-  )
+```{r}
+gcsi <- downloadPSet("gCSI_2019")
+gcsi
+```
+. . .
+
+*Task: extract the gene expression and mutation profiles*
+
+```{r}
+gcsi_rna <- summarizeMolecularProfiles(
+  gcsi, 
+  mDataType = "Kallisto_0.46.1.rnaseq"
+) |> suppressMessages()
+gcsi_mut <- summarizeMolecularProfiles(
+  gcsi,
+  mDataType = "mutation",
+  summary.stat = "and"
+) |> suppressMessages()
 ```
 
-### Summarize over technical replicates
+*Task: get treatment response data*
 
-Depending on the experiment design, you will need to choose how you want to 
-proceed with the data.
-
-One common approach is to summarize the technical replicates into a single value,
-this can be done by taking the mean, median, or any other summary statistic.
-
-## `Endoaggregate`
-
-In the interest of computation time and resources, we want to summarize the
-technical replicates into a single value and store that 
-result **inside** the `TreatmentResponseExperiment`.
-
-For this, we have developed the `endoaggregate` method. 
-
-This method will perform similar to the `aggregate` method, but will return a 
-`TreatmentResponseExperiment` object with the summarized data as another assay.
-
-```{r tre_endoaggregate}
-new_tre <- tre |>
-  endoaggregate(
-    N = .N,
-    assay = "sensitivity",
-    target = "tech_rep_counts",
-    by = c("treatmentid", "treatmentdose", "sampleid", "bio_rep")
-  )
-show(new_tre)
-head(new_tre$tech_rep_counts[order(-N)])
-```
-
-Let's use this method to summarize the technical replicates by taking the mean
-of the `viability` values for each unique combination of `treatmentid`, `treatmentdose`, `sampleid`, and `bio_rep`.
-
-```{r tre_endoaggregate2}
-tre_avged <- tre |>
-  endoaggregate(
-    viability = mean(viability),
-    assay = "sensitivity",
-    target = "mean_sensitivity",
-    by = c("treatmentid", "treatmentdose", "sampleid", "bio_rep")
-  )
-str(tre_avged$mean_sensitivity)
-```
-
-## Computing profiles
-
-```{r tre_endoaggregate3, warning=FALSE}
-tre_profiled <- tre_avged |>
-  endoaggregate(
-    {
-      fit <- PharmacoGx::logLogisticRegression(treatmentdose, viability)
-      IC50 <- PharmacoGx::computeIC50(treatmentdose, Hill_fit = fit)
-      AAC <- PharmacoGx::computeAUC(treatmentdose, Hill_fit = fit, area.type = "Fitted")
-      list(
-        HS = fit[["HS"]], E_inf = fit[["E_inf"]] / 100, EC50 = fit[["EC50"]],
-        Rsq = as.numeric(unlist(attributes(fit))),
-        AAC = AAC,
-        IC50 = IC50
-      )
-    },
-    assay = "mean_sensitivity",
-    subset = treatmentid %in% rowData(tre_avged)[, unique(treatmentid)][1:3],
-    by = c("treatmentid", "sampleid", "bio_rep"),
-    enlist = FALSE,
-    target = "profiles"
-  )
-```
-
-If we didn't subset the `TRE` this computation will have taken a while since
-it is a computationally intensive operation and run on a single thread.
-
-Under the hood, the `CoreGx` package performs the aggregation. 
-To speed up computation, it provides an `nthread` parameter to parallelize the
-computation.
-
-To determine a safe, and optimal number of threads to use, we can use the
-`CoreGx::optimizeCoreGx` function which will tell us a safe number of threads.
-
-NOTE: The following two code chunks will not be evaluated in this vignette as it
-may take some time. 
-
-```{r determine_nthreads, warning=FALSE, eval=FALSE}
-CoreGx::optimizeCoreGx(tre_avged)
-```
-
-Depending on your device, this number may vary.
-Let's use a conservative number of threads for this example.
-
-```{r tre_endoaggregate4, warning=FALSE, eval=FALSE}
-THREADS <- 6 # github runners provide 2c
-
-tre_profiled <- tre_avged |>
-  endoaggregate(
-    {
-      fit <- PharmacoGx::logLogisticRegression(treatmentdose, viability)
-      IC50 <- PharmacoGx::computeIC50(treatmentdose, Hill_fit = fit)
-      AAC <- PharmacoGx::computeAUC(treatmentdose, Hill_fit = fit, area.type = "Fitted")
-      list(
-        HS = fit[["HS"]], E_inf = fit[["E_inf"]] / 100, EC50 = fit[["EC50"]],
-        Rsq = as.numeric(unlist(attributes(fit))),
-        AAC = AAC,
-        IC50 = IC50,
-        mindose = min(treatmentdose),
-        maxdose = max(treatmentdose),
-        numdose = length(unique(treatmentdose)),
-        minviability = min(viability),
-        maxviability = max(viability)
-      )
-    },
-    assay = "mean_sensitivity",
-    by = c("treatmentid", "sampleid", "bio_rep"),
-    enlist = FALSE,
-    target = "profiles",
-    nthread = THREADS
-  )
-```
-
-Let's look at the profiles we have computed:
-
-```{r tre_profiled}
-show(tre_profiled)
-
-tre_profiled$profiles
+```{r}
+gcsi_sen <- summarizeSensitivityProfiles(
+    gcsi,
+    sensitivity.measure = "aac_recomputed",
+    summary.stat = "median",
+    verbose = TRUE
+)
 ```
 
 
+*Task: Find samples with lapatinib*
 
+```{r}
+egfr_tki <- c("Gefitinib", "Erlotinib", "Lapatinib")
+genes <- c("EGFR", "BRCA1", "BRCA2")
 
+# subset drug sensitivity
+sen <- t(gcsi_sen[egfr_tki,]) |> as.data.frame()
 
+# subset mutations
+mut <- t(assay(gcsi_mut)) |> as.data.frame()
+mut <- mut[,genes]
 
-# Quality Control of Pharmacogenomic Datasets
+# subset gene expression
+rna <- assay(gcsi_rna) |> as.data.frame()
+keep <- gcsi_rna@elementMetadata$gene_id[gcsi_rna@elementMetadata$gene_name %in% genes]
+rna <- t(rna[keep,]) |> as.data.frame()
+colnames(rna) <- gcsi_rna@elementMetadata$gene_name[match(colnames(rna), gcsi_rna@elementMetadata$gene_id)]
 
-For the remainder of the lab, we briefly go over some common scenarios that require
-quality control. We will load in a new molecular profile.
-
-
-## Checking for missing values
-
-```{r get_batch_tpm}
-# get molecular profile
-tpm_matrix <- pset@molecularProfiles[["rnaseq.tpm.batch"]] |>
-  assay() |>
-  as.data.frame()
-tpm_matrix[1:5, 1:5]
-
-# get metadata
-meta <- pset@molecularProfiles[["rnaseq.tpm.batch"]] |> colData()
-meta |> head()
+# keep common cell lines
+common <- intersect(rownames(sen), intersect(rownames(rna), rownames(mut)))
+sen <- sen[match(common, rownames(sen)),]
+rna <- rna[match(common, rownames(rna)),]
+mut <- mut[match(common, rownames(mut)),]
 ```
 
-For this exercise, we purposely put in a gene with many missing values. Let's look
-for this gene.
+*Task: is there an association between EGFR expression and TKi response*
 
-The code below will quantify the number of `NA` values in each row (gene).
-
-```{r count_NA}
-apply(tpm_matrix, 1, function(x) sum(is.na(x))) |> head()
-
-# print only genes with NA values
-sum_NA <- apply(tpm_matrix, 1, function(x) sum(is.na(x)))
-sum_NA[sum_NA > 0]
-```
-
-We see that `GENE002` has 25 `NA` values.
-It is important to consider the proportion of `NA` values relative to the number of
-observations. We can quickly calculate the proportion:
-
-```{r prortion_NA}
-num_NA <- sum_NA[sum_NA > 0] |> unname()
-num_observations <- ncol(tpm_matrix)
-
-# get proportion
-num_NA / num_observations
-```
-
-
-Now we know that 50% of samples have an `NA` value rather than an expression level
-for `GENE002`. This can be indicative of some technical issue. Let's remove this 
-gene from downstream analysis.
-
-```{r remove_gene}
-tpm_matrix <- tpm_matrix[-which(rownames(tpm_matrix) == "GENE002"), ]
-any(is.na(tpm_matrix))
-```
-
-In the last line of code, we check if there were any remaining `NA` values. Since
-there are none, we can move on to visualizing our data.
-
-## Principal component analysis for outlier removal
-
-Let's quickly take a look at our expression matrix again.
-
-```{r view_tpm}
-tpm_matrix[1:5, 1:5]
-```
-
-The expression matrix is currently formatted such that the features (genes) are the
-rows and the samples (cells) are the columns. 
-
-Since we want to do PCA to visualize the *samples*, we need to transpose the matrix 
-so that the attributes of the samples (genes) are the columns instead.
-
-```{r transpose_matrix}
-t_tpm_matrix <- tpm_matrix |>
-  t() |>
-  as.data.frame()
-t_tpm_matrix[1:5, 1:5]
-```
-
-Once the expression matrix is in the correct format, we can perform PCA using the 
-`prcomp` function.
-
-```{r pca_batch}
-org_pca <- prcomp(t_tpm_matrix)$x |> as.data.frame()
-
-print(dim(org_pca))
-
-org_pca[1:5, 1:5]
-```
-
-To visualize the data, we plot the first two principal components (PCs).
-
-```{r plot_PCs_batch}
-# add batch labels
-org_pca$Batch <- meta$batchid[match(rownames(org_pca), meta$sampleid)] |> as.factor()
-
-# plot
-p1 <- ggplot(org_pca) +
-  geom_point(aes(x = PC1, y = PC2, color = Batch), size = 5) +
-  scale_color_manual(values = c("#624763", "#B1D3A3")) +
-  theme_classic() +
-  ggtitle("Before Batch Correction")
-p1
-```
-
-There is a very obvious outlier in our data. We can quantitatively identify this outlier
-by identifying samples that lie beyond a threshold of `1.5 * IQR` of the first and fourth
-quartiles.
-
-```{r identify_outliers}
-# extract PC scores for given PC
-scores <- org_pca[["PC1"]]
-
-# compute IQR of given PC
-iqr <- IQR(scores)
-
-# compute upper and lower thresholds
-upp_thres <- quantile(scores, 0.75) + 1.5 * iqr
-low_thres <- quantile(scores, 0.25) - 1.5 * iqr
-
-# print samples with values beyond threshold
-outlier <- rownames(org_pca)[which(scores < low_thres | scores > upp_thres)]
-paste("Outlier for PC1:", outlier) |> print()
-```
-
-Let's remove `T-47D` and re-plot our data.
-
-```{r rm_outliers}
-# remove outlier
-outlier <- "T-47D"
-tpm_matrix[[outlier]] <- NULL
-
-# redo PCA and plotting
-org_pca <- prcomp(t(tpm_matrix))$x |> as.data.frame()
-org_pca$Batch <- meta$batchid[match(rownames(org_pca), meta$sampleid)] |> as.factor()
-
-p1 <- ggplot(org_pca) +
-  geom_point(aes(x = PC1, y = PC2, color = Batch), size = 5) +
-  scale_color_manual(values = c("#624763", "#B1D3A3")) +
-  theme_classic() +
-  ggtitle("Before Batch Correction")
-
-p1
-```
-
-Now that the outlier is removed, we have a better visualization of the data.
-It is very evident that the data points (samples) tend to cluster by batch. This 
-is indicative of a potential batch effect.
-
-## Adjusting for known batches
-
-When we have a known batch, we can adjust for it directly. One method is to use the
-`ComBat()` function from the `sva` package.
-
-```{r adjust_known_batch}
-# adjust for known batch
-adj_tpm_matrix <- ComBat(
-  dat = tpm_matrix,
-  batch = as.factor(meta$batchid[match(colnames(tpm_matrix), meta$sampleid)]),
-  par.prior = TRUE,
-  prior.plots = FALSE
+```{r}
+# plot associations between genes of interest and TKi
+toPlot <- data.frame(
+  sample = common,
+  EGFR = rna[["EGFR"]],
+  Lapatinib = sen[["Lapatinib"]],
+  Erlotinib = sen[["Erlotinib"]],
+  Gefitinib = sen[["Gefitinib"]]
 )
 
-adj_tpm_matrix[1:5, 1:5]
+res <- cor.test(toPlot$gene, toPlot$drug)
+print(paste0(
+  "EGFR expression and Lapatinib response have a Pearson's correlation of ",
+  round(res$estimate, 3), 
+  " (p-value = ", res$p.value, 10, ")"
+))
 ```
 
-We can now perform PCA and visualize on our adjusted TPM counts matrix. We will compare
-the results to the original PCA visualization.
+```{r}
+plot_egfr <- function(drug) {
+  return(
+    ggplot(toPlot, aes(x = EGFR, y = .data[[drug]])) +
+      geom_point() + geom_smooth(method = "lm") +
+      theme_minimal() + 
+      labs(x = "EGFR expression (TPM)", y = paste(drug, "response (AAC)"), title = drug)
+  )
+} 
 
-Don't forget to transpose the adjusted counts matrix!
+p1 <- plot_egfr("Lapatinib")
+p2 <- plot_egfr("Erlotinib")
+p3 <- plot_egfr("Gefitinib")
 
-```{r pca_adj_batch}
-# perform PCA on adjusted matrix
-
-adj_pca <- prcomp(t(adj_tpm_matrix))$x |> as.data.frame()
-adj_pca$Batch <- meta$batchid[match(rownames(adj_pca), meta$sampleid)] |> as.factor()
-
-# create scatter plot
-p2 <- ggplot(adj_pca) +
-  geom_point(aes(x = PC1, y = PC2, color = Batch), size = 5) +
-  scale_color_manual(values = c("#624763", "#B1D3A3")) +
-  theme_classic() +
-  ggtitle("After Batch Correction")
-
-# plot both plots side by side for comparison
-ggarrange(p1, p2, ncol = 2)
+ggarrange(p1, p2, p3, ncol = 3)
 ```
 
-For downstream pharmacogenomic analysis (or any other bioinformatic analysis), the
-batch-corrected expression matrix should be used.
+*Task: does BRCA mutation status influence the strength of association*
 
-For downstream pharmacogenomic analysis (or any other bioinformatic analysis), the
-batch-corrected expression matrix should be used.
+```{r}
+# get samples with BRCA1 mutation
+mutated <- mut[!is.na(mut$BRCA1),] |> rownames()
+toPlot$brca1 <- ifelse(toPlot$sample %in% mutated, "Mutated", "Unmutated")
+
+# plot association faceted by BRCA1 mutation status
+plot_egfr <- function(drug) {
+  return(
+    ggplot(toPlot, aes(x = EGFR, y = .data[[drug]])) +
+      geom_point() + geom_smooth(method = "lm") +
+      facet_wrap(~brca1, ncol = 1) +
+      theme_minimal() + 
+      labs(x = "EGFR expression (TPM)", y = paste(drug, "response (AAC)"), title = drug)
+  )
+} 
+
+p1 <- plot_egfr("Lapatinib")
+p2 <- plot_egfr("Erlotinib")
+p3 <- plot_egfr("Gefitinib")
+
+ggarrange(p1, p2, p3, ncol = 3)
+```
